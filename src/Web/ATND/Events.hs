@@ -16,6 +16,7 @@ module Web.ATND.Events
   )
   where
 
+import Debug.Trace(trace)
 import Web.ATND (endpointUrl, ApiType(..))
 
 import Data.Text (Text, unpack, pack)
@@ -23,7 +24,7 @@ import Data.Text (Text, unpack, pack)
 import Data.Aeson (decode, Value(..), object, (.=), FromJSON(..), (.:), Value(..))
 import Data.Aeson.Types ()
 import Data.Aeson.TH ()
-import Data.Aeson.Encode (encode)
+import Data.Aeson.Encode ()
 
 import Text.Parsec ()
 import Text.Parsec.Text ()
@@ -46,7 +47,7 @@ import Control.Monad.Logger ()
 import Control.Monad.Trans.Control ()
 
 -- | Represents an event id
-newtype EventId = EventId {unEventId :: Text}
+newtype EventId = EventId { unEventId :: Integer }
                   deriving (Show, Eq)
 
 -- | Represents an user id
@@ -158,14 +159,12 @@ instance FromJSON EventResults where
     parseJSON _ = mzero
 
 instance FromJSON EventResult where
-    parseJSON (Object v) = do
-      eid <- v .: "event_id"
-      etl <- v .: "title"
-      return $ EventResult eid etl 
+    parseJSON (Object v) = EventResult <$>
+                           v .: "event" <*>
+                           (e >>= (.: "title"))
+                           where e = (v .: "event")
     parseJSON _ = mzero
 
 instance FromJSON EventId where
-    parseJSON (Object v) = do
-      eid <- v .: "event_id"
-      return $ EventId eid
+    parseJSON (Object v) = EventId <$> v .: "event_id"
     parseJSON _ = mzero
