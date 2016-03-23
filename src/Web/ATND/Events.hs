@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 -- |
 -- Implements the \"events\" section of the ATND JSON API.
 --
@@ -16,12 +17,14 @@ module Web.ATND.Events
   )
   where
 
+import Control.Exception.Lifted
 import Debug.Trace(trace)
 import Web.ATND (endpointUrl, ApiType(..))
 
 import Data.Text (Text, unpack, pack)
+import Data.Typeable
 
-import Data.Aeson (decode, Value(..), object, (.=), FromJSON(..), (.:), Value(..))
+import Data.Aeson (decode, Value(..), object, (.=), ToJSON(..), FromJSON(..), (.:), Value(..))
 import Data.Aeson.Types ()
 import Data.Aeson.TH ()
 import Data.Aeson.Encode ()
@@ -34,11 +37,11 @@ import Control.Monad (mzero)
 import Control.Monad.IO.Class (liftIO)
 import Data.Default ()
 import qualified Data.ByteString.Char8 as B8
---import qualified Data.ByteString.Lazy as BL
+import qualified Data.ByteString.Lazy as BL
 import Data.Text.Encoding (encodeUtf8)
 import Data.ByteString.Lazy()
 import Data.Typeable ()
-import Network.HTTP.Conduit (setQueryString, tlsManagerSettings, parseUrl, newManager, httpLbs, RequestBody(..), Response(..), Request(..))
+import Network.HTTP.Conduit (HttpException(..), setQueryString, tlsManagerSettings, parseUrl, newManager, httpLbs, RequestBody(..), Response(..), Request(..))
 import Network.HTTP.Types ()
 import Network.HTTP.Types.Header ()
 import Control.Monad.Reader ()
@@ -144,15 +147,25 @@ getEvents eventIds
                          , mkq "count" $ fmap (\x -> [pack $ show x]) count
                          , mkq "format" $ Just [pack $ "json"] 
                          ]
-       man <- liftIO $ newManager tlsManagerSettings
 --       let req = initReq { requestBody = RequestBodyLBS $ encode request }
        let req = initReq
        let req' = setQueryString query req      
-       response <- httpLbs req' man
+       man <- liftIO $ newManager tlsManagerSettings
+       response <- catch (httpLbs req' man)
+         (\e ->
+           case e :: HttpException of
+             StatusCodeException _ headers _ -> do
+               let (mResponse :: Maybe ATNDError) = BL.fromStrict `fmap`
+                     (lookup "X-Response-Body-Start" headers) >>= decode
+               maybe (throwIO e) id (throwIO `fmap` mResponse)
+             _ -> throwIO e)
        let jsResult = decode $ responseBody response
        case jsResult of
          Just eventResults -> return eventResults
-         Nothing -> liftIO $ mzero
+         Nothing -> throwIO $ OtherATNDError (-1) "Parse Error: Could not parse result JSON from ATND"
+
+instance ToJSON EventId where
+    toJSON (EventId t) = object ["event_id" .= t]
 
 instance FromJSON EventResults where
     parseJSON (Object v) = EventResults <$> v .: "events"
@@ -168,3 +181,21 @@ instance FromJSON EventResult where
 instance FromJSON EventId where
     parseJSON (Object v) = EventId <$> v .: "event_id"
     parseJSON _ = mzero
+
+data ATNDError = NotFoundError Int Text
+               | OtherATNDError Int Text
+               deriving (Typeable, Show, Eq)
+
+instance Exception ATNDError
+
+instance FromJSON ATNDError where
+    parseJSON (Object v) = do
+      status <- v .: "status"
+      message <- v .: "error"
+      return $ (errConstructor status) ((read $ unpack status)::Int) message
+     where
+       errConstructor status = case (status :: Text) of
+                                 "404" -> NotFoundError
+                                 _ -> OtherATNDError
+    parseJSON _ = mzero
+
