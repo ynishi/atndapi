@@ -9,22 +9,21 @@ module Web.ATND.Events
   getEvents,
   -- * Parameter types
   EventId(..),
-  User(..),
-  OwnerId(..),
+  Person(..),
   -- * Resut Type
   EventResults(..),
   EventResult(..)
   )
   where
 
-import Control.Exception.Lifted
+import Control.Exception.Lifted as CEL
 import Debug.Trace(trace)
 import Web.ATND (endpointUrl, ApiType(..))
 
 import Data.Text (Text, unpack, pack)
 import Data.Typeable
 
-import Data.Aeson (decode, Value(..), object, (.=), ToJSON(..), FromJSON(..), (.:), Value(..))
+import Data.Aeson (decode, Value(..), object, (.=), ToJSON(..), FromJSON(..), (.:), (.:?), Value(..))
 import Data.Aeson.Types ()
 import Data.Aeson.TH ()
 import Data.Aeson.Encode ()
@@ -33,7 +32,7 @@ import Text.Parsec ()
 import Text.Parsec.Text ()
 import Control.Exception.Base ()
 import Control.Exception.Lifted ()
-import Control.Monad (mzero)
+import Control.Monad (mzero, liftM)
 import Control.Monad.IO.Class (liftIO)
 import Data.Default ()
 import qualified Data.ByteString.Char8 as B8
@@ -49,27 +48,54 @@ import Control.Monad.Trans.Resource (runResourceT)
 import Control.Monad.Logger ()
 import Control.Monad.Trans.Control ()
 
+import Data.Time
+
 -- | Represents an event id
 newtype EventId = EventId { unEventId :: Integer }
                   deriving (Show, Eq)
 
--- | Represents an user id
-data User = User { userId :: Text,
-          nickname :: Text,
-          twitterId :: Text
-          }
-                  deriving (Show, Eq)
+-- | Represents an person(user or owner)
+data Person = Person { personId :: Integer,
+            personNickname :: Text,
+            personTwitterId :: Maybe Text
+            } deriving (Show, Eq)
 
--- | Represents an owner
-newtype OwnerId = OwnerId {unOwnerId :: Text}
-                  deriving (Show, Eq)
+-- | Respresents ATND time format
+newtype ATNDTime = ATNDTime { unATNDTime :: UTCTime }
+
+instance Eq ATNDTime where
+    x == y = unATNDTime x == unATNDTime y
+
+instance Show ATNDTime where
+    show x = show $ unATNDTime x
+
+atndTimeFormat :: String
+atndTimeFormat = "%FT%T%Q%z"
 
 -- | The results of search event
 newtype EventResults = EventResults { events :: [EventResult] }
                  deriving (Show, Eq)
 
 -- | The result of search event
-data EventResult = EventResult { eventId :: EventId, title :: Text }
+data EventResult = EventResult { 
+                 eventId :: EventId, 
+                 title :: Text,
+                 catch :: Maybe Text,
+                 description :: Text,
+                 eventUrl :: Text,
+                 startedAt :: ATNDTime,
+                 endedAt :: Maybe UTCTime,
+                 url :: Maybe Text,
+                 limit :: Integer,
+                 address :: Text,
+                 place :: Text,
+                 lat :: Text,
+                 lon :: Text,
+                 owner :: Person,
+                 accepted :: Integer,
+                 waiting :: Integer,
+                 updatedAt :: Maybe UTCTime 
+                 }
                  deriving (Show, Eq)
 
 -- | Get event data(JSON) 
@@ -83,17 +109,17 @@ getEvents :: Maybe [EventId]
          -- ^ hold on year-month(yyyymm)
          -> Maybe [Text]
          -- ^ hold on date(yyyymmdd)
-         -> Maybe [User]
+         -> Maybe [Person]
          -- ^ User's id
-         -> Maybe [User]
+         -> Maybe [Person]
          -- ^ User's nickname
-         -> Maybe [User]
+         -> Maybe [Person]
          -- ^ User's twitter id
-         -> Maybe [Text]
+         -> Maybe [Person]
          -- ^ Owner's id
-         -> Maybe [Text]
+         -> Maybe [Person]
          -- ^ Owner's nickname
-         -> Maybe [Text]
+         -> Maybe [Person]
          -- ^ Owner's twitter id
          -> Maybe Integer
          -- ^ Start position of results(default: 1)
@@ -110,7 +136,7 @@ getEvents eventIds
          userTwitterIds
          ownerIds
          ownerNicknames
-         ownerTwitterIDs
+         ownerTwitterIds
          start
          count = runResourceT $ do
        initReq <- parseUrl $ unpack $ endpointUrl Search
@@ -119,12 +145,16 @@ getEvents eventIds
                           , "keyword_or" .= keywordOrs
                           , "ym" .= yms
                           , "ymd" .= ymds
-                          , "user_id" .= fmap (map userId) userIds
-                          , "nickname" .= fmap (map nickname) userNicknames
-                          , "twitter_id" .= fmap (map twitterId)userTwitterIds
-                          , "owner_id" .= ownerIds
-                          , "owner_nickname" .= ownerNicknames
-                          , "owner_twitter_id" .= ownerTwitterIDs
+                          , "user_id" .= fmap (map personId) userIds
+                          , "nickname" .= fmap (map personNickname) userNicknames
+                          , "twitter_id" .= fmap (map (\user -> case personTwitterId user of
+                                                 Just uti -> uti 
+                                                 Nothing -> "")) userTwitterIds
+                          , "owner_id" .= fmap (map personId) ownerIds
+                          , "owner_nickname" .= fmap (map personNickname) ownerNicknames
+                          , "owner_twitter_id" .= fmap (map (\owner -> case personTwitterId owner of
+                                                       Just oti -> oti 
+                                                       Nothing -> "")) ownerTwitterIds
                           , "start" .= start
                           , "count" .= count
                           , "format" .= ("json"::Text)
@@ -137,12 +167,16 @@ getEvents eventIds
                          , mkq "keyword_or" keywordOrs 
                          , mkq "ym" yms
                          , mkq "ymd" ymds
-                         , mkq "user_id" $ fmap (map userId) userIds 
-                         , mkq "nickname" $ fmap (map nickname) userNicknames 
-                         , mkq "twitter_id" $ fmap (map twitterId) userTwitterIds 
-                         , mkq "owner_id" ownerIds
-                         , mkq "owner_nickname" ownerNicknames
-                         , mkq "owner_twitter_id" ownerTwitterIDs
+                         , mkq "user_id" $ fmap (map (pack . show . personId)) userIds 
+                         , mkq "nickname" $ fmap (map personNickname) userNicknames 
+                         , mkq "twitter_id" $ fmap (map (\user -> case personTwitterId user of
+                                                   Just uti -> uti 
+                                                   Nothing -> "")) userTwitterIds 
+                         , mkq "owner_id" $ fmap (map (pack . show. personId)) ownerIds
+                         , mkq "owner_nickname" $ fmap (map personNickname) ownerNicknames
+                         , mkq "owner_twitter_id" $ fmap (map (\owner -> case personTwitterId owner of
+                                                         Just oti -> oti 
+                                                         Nothing -> "")) ownerTwitterIds
                          , mkq "start" $ fmap (\x -> [pack $ show x]) start 
                          , mkq "count" $ fmap (\x -> [pack $ show x]) count
                          , mkq "format" $ Just [pack $ "json"] 
@@ -151,7 +185,7 @@ getEvents eventIds
        let req = initReq
        let req' = setQueryString query req      
        man <- liftIO $ newManager tlsManagerSettings
-       response <- catch (httpLbs req' man)
+       response <- CEL.catch (httpLbs req' man)
          (\e ->
            case e :: HttpException of
              StatusCodeException _ headers _ -> do
@@ -171,10 +205,36 @@ instance FromJSON EventResults where
     parseJSON (Object v) = EventResults <$> v .: "events"
     parseJSON _ = mzero
 
+parseATNDTime :: String -> Maybe UTCTime
+parseATNDTime = parseTimeM True defaultTimeLocale "%FT%T%Q%z"
+
+instance FromJSON ATNDTime where
+    parseJSON (String s) = maybe mzero (return . ATNDTime) $ 
+      parseTimeM True defaultTimeLocale atndFormat (unpack s) 
+    parseJSON _ = mzero
+
 instance FromJSON EventResult where
     parseJSON (Object v) = EventResult <$>
                            v .: "event" <*>
-                           (e >>= (.: "title"))
+                           (e >>= (.: "title")) <*>
+                           (e >>= (.:? "catch")) <*>
+                           (e >>= (.: "description")) <*>
+                           (e >>= (.: "event_url")) <*>
+                           (e >>= (.: "started_at")) <*>
+                           liftM parseATNDTime (e >>= (.: "ended_at")) <*>
+                           (e >>= (.:? "url")) <*>
+                           (e >>= (.: "limit")) <*>
+                           (e >>= (.: "address")) <*>
+                           (e >>= (.: "place")) <*>
+                           (e >>= (.: "lat")) <*>
+                           (e >>= (.: "lon")) <*>
+                           (Person <$>
+                             (e >>= (.: "owner_id")) <*>
+                             (e >>= (.: "owner_nickname")) <*>
+                             (e >>= (.:? "owner_twitter_id"))) <*>
+                           (e >>= (.: "accepted")) <*>
+                           (e >>= (.: "waiting")) <*>
+                           liftM parseATNDTime (e >>= (.: "updated_at"))
                            where e = (v .: "event")
     parseJSON _ = mzero
 
