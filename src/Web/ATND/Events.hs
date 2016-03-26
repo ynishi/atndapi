@@ -12,7 +12,10 @@ module Web.ATND.Events
   Person(..),
   -- * Resut Type
   EventResults(..),
-  EventResult(..)
+  EventResult(..),
+  -- * run
+  runATND,
+  defaultATNDConfig
   )
   where
 
@@ -33,18 +36,18 @@ import Text.Parsec.Text ()
 import Control.Exception.Base ()
 import Control.Exception.Lifted ()
 import Control.Monad (mzero, liftM)
-import Control.Monad.IO.Class (liftIO)
+import Control.Monad.IO.Class (liftIO, MonadIO)
 import Data.Default ()
 import qualified Data.ByteString.Char8 as B8
 import qualified Data.ByteString.Lazy as BL
 import Data.Text.Encoding (encodeUtf8)
 import Data.ByteString.Lazy()
 import Data.Typeable ()
-import Network.HTTP.Conduit (HttpException(..), setQueryString, tlsManagerSettings, parseUrl, newManager, httpLbs, RequestBody(..), Response(..), Request(..))
+import Network.HTTP.Conduit (HttpException(..), setQueryString, tlsManagerSettings, parseUrl, newManager, httpLbs, RequestBody(..), Response(..), Request(..), Manager)
 import Network.HTTP.Types ()
 import Network.HTTP.Types.Header ()
-import Control.Monad.Reader ()
-import Control.Monad.Trans.Resource (runResourceT)
+import Control.Monad.Reader (runReaderT, ReaderT)
+import Control.Monad.Trans.Resource (runResourceT, ResourceT)
 import Control.Monad.Logger ()
 import Control.Monad.Trans.Control ()
 
@@ -84,7 +87,7 @@ data EventResult = EventResult {
                  description :: Text,
                  eventUrl :: Text,
                  startedAt :: ATNDTime,
-                 endedAt :: Maybe UTCTime,
+                 endedAt :: ATNDTime,
                  url :: Maybe Text,
                  limit :: Integer,
                  address :: Text,
@@ -94,7 +97,7 @@ data EventResult = EventResult {
                  owner :: Person,
                  accepted :: Integer,
                  waiting :: Integer,
-                 updatedAt :: Maybe UTCTime 
+                 updatedAt :: ATNDTime 
                  }
                  deriving (Show, Eq)
 
@@ -210,7 +213,7 @@ parseATNDTime = parseTimeM True defaultTimeLocale "%FT%T%Q%z"
 
 instance FromJSON ATNDTime where
     parseJSON (String s) = maybe mzero (return . ATNDTime) $ 
-      parseTimeM True defaultTimeLocale atndFormat (unpack s) 
+      parseTimeM True defaultTimeLocale atndTimeFormat (unpack s) 
     parseJSON _ = mzero
 
 instance FromJSON EventResult where
@@ -221,7 +224,7 @@ instance FromJSON EventResult where
                            (e >>= (.: "description")) <*>
                            (e >>= (.: "event_url")) <*>
                            (e >>= (.: "started_at")) <*>
-                           liftM parseATNDTime (e >>= (.: "ended_at")) <*>
+                           (e >>= (.: "ended_at")) <*>
                            (e >>= (.:? "url")) <*>
                            (e >>= (.: "limit")) <*>
                            (e >>= (.: "address")) <*>
@@ -234,7 +237,7 @@ instance FromJSON EventResult where
                              (e >>= (.:? "owner_twitter_id"))) <*>
                            (e >>= (.: "accepted")) <*>
                            (e >>= (.: "waiting")) <*>
-                           liftM parseATNDTime (e >>= (.: "updated_at"))
+                           (e >>= (.: "updated_at"))
                            where e = (v .: "event")
     parseJSON _ = mzero
 
@@ -259,3 +262,16 @@ instance FromJSON ATNDError where
                                  _ -> OtherATNDError
     parseJSON _ = mzero
 
+data ATNDConfig = ATNDConfig { atndManager :: Manager }
+
+-- | create a ATNDConfig with a new Manager
+defaultATNDConfig :: MonadIO m => m ATNDConfig
+defaultATNDConfig = do
+      man <- liftIO $ newManager tlsManagerSettings
+      return ATNDConfig { atndManager = man }
+
+type ATND a = ReaderT ATNDConfig (ResourceT IO) a
+
+runATND :: (MonadIO m) => ATNDConfig -> ATND a -> m a
+runATND config action =
+    liftIO $ runResourceT $ runReaderT action config
