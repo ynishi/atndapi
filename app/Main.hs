@@ -2,8 +2,9 @@
 
 module Main where
 
-import Web.ATND() 
-import Web.ATND.Events
+import Web.ATND 
+import Web.ATND.Event
+import Web.ATND.Util
 import Data.Text(Text)
 
 main :: IO ()
