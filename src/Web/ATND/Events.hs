@@ -1,5 +1,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE FlexibleContexts #-}
+
 -- |
 -- Implements the \"events\" section of the ATND JSON API.
 --
@@ -13,9 +17,9 @@ module Web.ATND.Events
   -- * Resut Type
   EventResults(..),
   EventResult(..),
-  -- * run
-  runATND,
-  defaultATNDConfig
+  -- * The ATND/ATNDT monad 
+  runATNDT,
+  defaultATNDConfig,
   )
   where
 
@@ -45,11 +49,11 @@ import Data.ByteString.Lazy()
 import Data.Typeable ()
 import Network.HTTP.Conduit (HttpException(..), setQueryString, tlsManagerSettings, parseUrl, newManager, httpLbs, RequestBody(..), Response(..), Request(..), Manager)
 import Network.HTTP.Types ()
-import Network.HTTP.Types.Header ()
+import Network.HTTP.Types.Header (ResponseHeaders(..))
 import Control.Monad.Reader (runReaderT, ReaderT)
 import Control.Monad.Trans.Resource (runResourceT, ResourceT)
-import Control.Monad.Logger ()
-import Control.Monad.Trans.Control ()
+import Control.Monad.Logger
+import Control.Monad.Trans.Control (MonadBaseControl)
 
 import Data.Time
 
@@ -101,6 +105,27 @@ data EventResult = EventResult {
                  }
                  deriving (Show, Eq)
 
+query :: (FromJSON x) => ApiType -> [(B8.ByteString, Maybe B8.ByteString)] -> ATNDT m x
+query t queryList = do 
+       config <- defaultATNDConfig 
+       initReq <- liftIO $ parseUrl $ unpack $ endpointUrl t 
+       let req = setQueryString queryList $ initReq
+       $(logDebug) $ pack . show $ queryString req 
+       man <- liftIO $ newManager tlsManagerSettings
+       response <- CEL.catch (httpLbs req $ atndManager config) catchHttpException
+       $(logDebug) $ pack . show $ responseBody response 
+       case decode $ responseBody response of
+         Just eventResults -> return eventResults
+         Nothing -> throwIO $ OtherATNDError (-1) "Parse Error: Could not parse result JSON from ATND"
+       where
+         catchHttpException :: HttpException -> ATNDT m a
+         catchHttpException e@(StatusCodeException _ headers _) = do
+           $(logDebug) $ pack . show $ lookup "X-Response-Boby-Start" headers 
+           maybe (throwIO e) throwIO (decodeError headers)
+         catchHttpException e = throwIO e
+         decodeError :: ResponseHeaders -> Maybe ATNDError
+         decodeError headers = BL.fromStrict `fmap` lookup "X-Response-Body-Start" headers >>= decode
+
 -- | Get event data(JSON) 
 getEvents :: Maybe [EventId]
          -- ^ Event's id
@@ -128,7 +153,7 @@ getEvents :: Maybe [EventId]
          -- ^ Start position of results(default: 1)
          -> Maybe Integer
          -- ^ Count of results(default: 10, min: 1, max: 10)
-         -> IO EventResults
+         -> ATNDT m EventResults
 getEvents eventIds
          keywords
          keywordOrs
@@ -141,65 +166,32 @@ getEvents eventIds
          ownerNicknames
          ownerTwitterIds
          start
-         count = runResourceT $ do
-       initReq <- parseUrl $ unpack $ endpointUrl Search
-       let request = object [ "event_id" .= fmap (map unEventId) eventIds
-                          , "keyword" .= keywords
-                          , "keyword_or" .= keywordOrs
-                          , "ym" .= yms
-                          , "ymd" .= ymds
-                          , "user_id" .= fmap (map personId) userIds
-                          , "nickname" .= fmap (map personNickname) userNicknames
-                          , "twitter_id" .= fmap (map (\user -> case personTwitterId user of
-                                                 Just uti -> uti 
-                                                 Nothing -> "")) userTwitterIds
-                          , "owner_id" .= fmap (map personId) ownerIds
-                          , "owner_nickname" .= fmap (map personNickname) ownerNicknames
-                          , "owner_twitter_id" .= fmap (map (\owner -> case personTwitterId owner of
-                                                       Just oti -> oti 
-                                                       Nothing -> "")) ownerTwitterIds
-                          , "start" .= start
-                          , "count" .= count
-                          , "format" .= ("json"::Text)
-                          ]
-       let mkq k xs = case xs of
-                        Just xb -> map (\x -> ((B8.pack k), Just $ encodeUtf8 x)) xb
+         count = do
+       query Search queryList 
+       where
+         toQmap k xs = case xs of
+                        Just xb -> map (\x -> (k, Just $ encodeUtf8 x)) xb
                         Nothing -> []
-       let query = concat [mkq "keyword" keywords
-                         , mkq "keyword_or" keywordOrs  
-                         , mkq "keyword_or" keywordOrs 
-                         , mkq "ym" yms
-                         , mkq "ymd" ymds
-                         , mkq "user_id" $ fmap (map (pack . show . personId)) userIds 
-                         , mkq "nickname" $ fmap (map personNickname) userNicknames 
-                         , mkq "twitter_id" $ fmap (map (\user -> case personTwitterId user of
+         queryList :: [(B8.ByteString, Maybe B8.ByteString)] 
+         queryList = concat [toQmap "keyword" keywords
+                         , toQmap "keyword_or" keywordOrs  
+                         , toQmap "keyword_or" keywordOrs 
+                         , toQmap "ym" yms
+                         , toQmap "ymd" ymds
+                         , toQmap "user_id" $ fmap (map (pack . show . personId)) userIds 
+                         , toQmap "nickname" $ fmap (map personNickname) userNicknames 
+                         , toQmap "twitter_id" $ fmap (map (\user -> case personTwitterId user of
                                                    Just uti -> uti 
                                                    Nothing -> "")) userTwitterIds 
-                         , mkq "owner_id" $ fmap (map (pack . show. personId)) ownerIds
-                         , mkq "owner_nickname" $ fmap (map personNickname) ownerNicknames
-                         , mkq "owner_twitter_id" $ fmap (map (\owner -> case personTwitterId owner of
+                         , toQmap "owner_id" $ fmap (map (pack . show. personId)) ownerIds
+                         , toQmap "owner_nickname" $ fmap (map personNickname) ownerNicknames
+                         , toQmap "owner_twitter_id" $ fmap (map (\owner -> case personTwitterId owner of
                                                          Just oti -> oti 
                                                          Nothing -> "")) ownerTwitterIds
-                         , mkq "start" $ fmap (\x -> [pack $ show x]) start 
-                         , mkq "count" $ fmap (\x -> [pack $ show x]) count
-                         , mkq "format" $ Just [pack $ "json"] 
+                         , toQmap "start" $ fmap (\x -> [pack $ show x]) start 
+                         , toQmap "count" $ fmap (\x -> [pack $ show x]) count
+                         , toQmap "format" $ Just [pack $ "json"] 
                          ]
---       let req = initReq { requestBody = RequestBodyLBS $ encode request }
-       let req = initReq
-       let req' = setQueryString query req      
-       man <- liftIO $ newManager tlsManagerSettings
-       response <- CEL.catch (httpLbs req' man)
-         (\e ->
-           case e :: HttpException of
-             StatusCodeException _ headers _ -> do
-               let (mResponse :: Maybe ATNDError) = BL.fromStrict `fmap`
-                     (lookup "X-Response-Body-Start" headers) >>= decode
-               maybe (throwIO e) id (throwIO `fmap` mResponse)
-             _ -> throwIO e)
-       let jsResult = decode $ responseBody response
-       case jsResult of
-         Just eventResults -> return eventResults
-         Nothing -> throwIO $ OtherATNDError (-1) "Parse Error: Could not parse result JSON from ATND"
 
 instance ToJSON EventId where
     toJSON (EventId t) = object ["event_id" .= t]
@@ -207,9 +199,6 @@ instance ToJSON EventId where
 instance FromJSON EventResults where
     parseJSON (Object v) = EventResults <$> v .: "events"
     parseJSON _ = mzero
-
-parseATNDTime :: String -> Maybe UTCTime
-parseATNDTime = parseTimeM True defaultTimeLocale "%FT%T%Q%z"
 
 instance FromJSON ATNDTime where
     parseJSON (String s) = maybe mzero (return . ATNDTime) $ 
@@ -270,8 +259,15 @@ defaultATNDConfig = do
       man <- liftIO $ newManager tlsManagerSettings
       return ATNDConfig { atndManager = man }
 
-type ATND a = ReaderT ATNDConfig (ResourceT IO) a
+type ATNDT m a = (MonadIO m, MonadLogger m, MonadBaseControl IO m) => ReaderT ATNDConfig m a
 
-runATND :: (MonadIO m) => ATNDConfig -> ATND a -> m a
+runATNDT :: (MonadIO m, MonadLogger m, MonadBaseControl IO m) => ATNDConfig -> ATNDT m a -> m a
+runATNDT config action =
+    runReaderT action config
+
+type ATND a = ATNDT(LoggingT IO) a 
+
+runATND :: (MonadIO m) => 
+  (ATNDConfig -> ATNDT(LoggingT IO) a -> m a)
 runATND config action =
-    liftIO $ runResourceT $ runReaderT action config
+    liftIO $ runStderrLoggingT $ flip runReaderT config action

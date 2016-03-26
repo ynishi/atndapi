@@ -1,7 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Web.ATND 
-    ( endpointUrl,
-      ApiType(..),
+    (
+      endpointUrl,
+      ApiType(..)
     ) where
 
 import Data.Text(Text)
