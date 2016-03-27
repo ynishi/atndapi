@@ -21,9 +21,6 @@ http://api.atnd.org
 ```bash
 cabal update && cabal install atndapi
 ```
-```bash
-stack install atndapi
-```
 
 ### Usage
 
