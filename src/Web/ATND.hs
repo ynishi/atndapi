@@ -77,7 +77,7 @@ type ATND a = ATNDT(LoggingT IO) a
 runATND :: (MonadIO m) => 
   (ATNDConfig -> ATNDT(LoggingT IO) a -> m a)
 runATND config action =
-    liftIO $ runStderrLoggingT $ flip runReaderT config action
+    liftIO $ runStderrLoggingT $ runATNDT config action
 
 -- | Build the ATND endpoint URL
 -- make https://api.atnd.org/events/[usres]
