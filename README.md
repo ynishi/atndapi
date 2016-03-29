@@ -28,3 +28,4 @@ stack install atndapi
 ### Usage
 
 see https://github.com/ynishi/atndapi/blob/master/test/Web/ATNDSpec.hs
+

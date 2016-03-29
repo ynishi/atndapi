@@ -42,11 +42,11 @@ data Event = Event {
            startedAt :: ATNDTime,
            endedAt :: ATNDTime,
            url :: Maybe Text,
-           limit :: Integer,
+           limit :: Maybe Integer,
            address :: Text,
            place :: Text,
-           lat :: Text,
-           lon :: Text,
+           lat :: Maybe Text,
+           lon :: Maybe Text,
            owner :: Web.ATND.Util.Person,
            accepted :: Integer,
            waiting :: Integer,
@@ -134,11 +134,11 @@ instance FromJSON Event where
                            (e >>= (.: "started_at")) <*>
                            (e >>= (.: "ended_at")) <*>
                            (e >>= (.:? "url")) <*>
-                           (e >>= (.: "limit")) <*>
+                           (e >>= (.:? "limit")) <*>
                            (e >>= (.: "address")) <*>
                            (e >>= (.: "place")) <*>
-                           (e >>= (.: "lat")) <*>
-                           (e >>= (.: "lon")) <*>
+                           (e >>= (.:? "lat")) <*>
+                           (e >>= (.:? "lon")) <*>
                            (Web.ATND.Util.Person <$>
                              (e >>= (.: "owner_id")) <*>
                              (e >>= (.: "owner_nickname")) <*>
