@@ -2,17 +2,17 @@
 
 ## About 
 
-ATND is the Web service for events in Japan.
-  https://atnd.org/events
+ATND is the Web service for events in Japan.  
+https://atnd.org/events
 
-It is inspired by the article below. 
-  https://www.schoolofhaskell.com/school/to-infinity-and-beyond/competition-winners/interfacing-with-restful-json-apis
-  https://github.com/BJTerry/mailchimp
+It is inspired by the article below.  
+https://www.schoolofhaskell.com/school/to-infinity-and-beyond/competition-winners/interfacing-with-restful-json-apis  
+https://github.com/BJTerry/mailchimp
 
 ## Supported
 
-- Event search
-  http://api.atnd.org
+- Event search api  
+http://api.atnd.org
 
 ## Getting started
 
@@ -20,9 +20,6 @@ It is inspired by the article below.
 
 ```bash
 cabal update && cabal install atndapi
-```
-```bash
-stack install atndapi
 ```
 
 ### Usage
